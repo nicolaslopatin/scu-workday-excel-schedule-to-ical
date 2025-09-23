@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>SCU Workday Excel Schedule to iCal</title>
+	<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+	<script>
+		function processExcel() {
+			const fileInput = document.getElementById('fileInput');
+			if (!fileInput.files.length || fileInput.files[0].type !== 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+				alert('Please upload an Excel file.');
+				return;
+			}
+
+			const file = fileInput.files[0];
+			const reader = new FileReader();
+
+			reader.onload = function (e) {
+				const data = new Uint8Array(e.target.result);
+				const workbook = XLSX.read(data, { type: 'array' });
+				const firstSheetName = workbook.SheetNames[0];
+				const worksheet = workbook.Sheets[firstSheetName];
+
+				const headerRow = 3; // As seen when opened in Excel (1-based index)
+
+				const headerColumns = {
+					"Course Listing": null,
+					"Meeting Patterns": null,
+					"Instructor": null,
+					"Start Date": null,
+					"End Date": null
+				};
+				
+				// Function to get the range of the sheet if the range metadata is not set correctly in the file
+				function getSheetRange(worksheet) {
+					let minRow = Infinity, maxRow = -1, minCol = Infinity, maxCol = -1;
+					Object.keys(worksheet).forEach(key => {
+						if (key[0] === '!') return;
+						const { c, r } = XLSX.utils.decode_cell(key);
+						if (r < minRow) minRow = r;
+						if (r > maxRow) maxRow = r;
+						if (c < minCol) minCol = c;
+						if (c > maxCol) maxCol = c;
+					});
+					return {
+						s: { c: minCol, r: minRow },
+						e: { c: maxCol, r: maxRow }
+					};
+				}
+
+				let range = XLSX.utils.decode_range(worksheet['!ref']);
+				if (range.s.c === range.e.c && range.s.r === range.e.r) {
+					// If only one cell is detected (the range metadata wasn't set correctly), recalculate using getSheetRange
+					range = getSheetRange(worksheet);
+				}
+				console.log('Range:', range);
+				
+				// Map header columns to their respective column letters
+				for (let c = range.s.c; c <= range.e.c; ++c) {
+					const cellAddress = XLSX.utils.encode_cell({ c: c, r: headerRow - 1 });
+					const cell = worksheet[cellAddress];
+					if (cell && cell.v && headerColumns.hasOwnProperty(cell.v.trim())) {
+						headerColumns[cell.v.trim()] = XLSX.utils.encode_col(c);
+					}
+				}
+				console.log('Header Columns:', headerColumns);
+
+				let events = [];
+
+				let row = headerRow + 1;
+
+				// Loop through the rows to extract event data
+				while (true) {
+					let event = {};
+					let isEmptyRow = true;
+
+					// Get cell values by header
+					const summaryCell = worksheet[headerColumns["Course Listing"] + row];
+					const meetingPatternsCell = worksheet[headerColumns["Meeting Patterns"] + row];
+					const instructorCell = worksheet[headerColumns["Instructor"] + row];
+					const startDateCell = worksheet[headerColumns["Start Date"] + row];
+					const endDateCell = worksheet[headerColumns["End Date"] + row];
+					
+					// Prepare event data
+					const summary = summaryCell ? summaryCell.v : '';
+					const meetingPatterns = meetingPatternsCell ? meetingPatternsCell.v : '';
+					const instructor = instructorCell ? instructorCell.v : '';
+					let startDate = startDateCell ? startDateCell.v : '';
+					let endDate = endDateCell ? endDateCell.v : '';
+
+					// Format dates
+					if (startDate) startDate = XLSX.SSF.format('yyyy-mm-dd', startDate);
+					if (endDate) endDate = XLSX.SSF.format('yyyy-mm-dd', endDate);
+
+					// Extract meeting pattern info
+					if (meetingPatterns) {
+						const parts = meetingPatterns.split(' | ');
+						event.daysOfWeek = parts[0].split(' ');
+						const timeRange = parts[1].split(' - ');
+						event.startTime = convertTimeTo24HourFormat(timeRange[0]);
+						event.endTime = convertTimeTo24HourFormat(timeRange[1]);
+						event.location = parts[2];
+					}
+
+					// Set event properties
+					event.summary = summary;
+					event.note = instructor;
+					event.startDate = startDate;
+					event.endDate = endDate;
+
+					if (summary || meetingPatterns || instructor || startDate || endDate) {
+						isEmptyRow = false;
+					}
+
+					if (isEmptyRow) {
+						break;
+					}
+
+					events.push(event);
+					row++;
+				}
+
+				console.log('Extracted events:', events);
+				events.forEach((event, index) => {
+					console.log(`Event ${index + 1}:`, event);
+				});
+				createICal(events);
+			};
+
+			reader.readAsArrayBuffer(file);
+		}
+
+		function convertTimeTo24HourFormat(time) {
+			const [timePart, modifier] = time.split(' ');
+			let [hours, minutes] = timePart.split(':');
+			if (modifier === 'PM' && hours !== '12') {
+				hours = parseInt(hours, 10) + 12;
+			}
+			if (modifier === 'AM' && hours === '12') {
+				hours = '00';
+			}
+			if (modifier === 'AM' && parseInt(hours, 10) < 10) {
+				hours = '0' + parseInt(hours, 10);
+			}
+			return `${hours}:${minutes}`;
+		}
+
+		function createICal(events) {
+			console.log('Starting iCal creation');
+
+			const formatDateTime = (date, time) => {
+				console.log(`Formatting date and time: ${date}, ${time}`);
+				return date.replace(/-/g, '') + 'T' + time.replace(/:/g, '') + '00';
+			};
+
+			const dayMap = { 'Su': 0, 'M': 1, 'T': 2, 'W': 3, 'Th': 4, 'F': 5, 'Sa': 6 };
+			const dayMapReverse = { 0: 'SU', 1: 'MO', 2: 'TU', 3: 'WE', 4: 'TH', 5: 'FR', 6: 'SA' };
+
+			const findNextValidDate = (date, selectedDays) => {
+				console.log(`Finding next valid date from: ${date}, selected days: ${selectedDays}`);
+				let nextDate = new Date(date + 'T00:00:00'); // Ensure the date is interpreted in local time
+				let attempts = 0; // Safeguard to prevent infinite loop
+				while (!selectedDays.includes(nextDate.getDay())) {
+					nextDate.setDate(nextDate.getDate() + 1); // Moves to the next day, including to next month/year if necessary
+					attempts++;
+					if (attempts > 7) { // Safeguard: stop after 1 week of attempts
+						console.error('Unable to find a valid date within 1 week');
+						let nextDate = new Date(date + 'T00:00:00'); // Ensure the date is interpreted in local time
+						break;
+					}
+				}
+				console.log(`Next valid date: ${nextDate.toISOString().split('T')[0]}`);
+				return nextDate.toISOString().split('T')[0];
+			};
+
+			const createEvent = (event, alertTimes) => {
+				console.log('Creating event:', event);
+				const selectedDays = event.daysOfWeek.map(day => dayMap[day]);
+				const startDate = findNextValidDate(event.startDate, selectedDays);
+
+				const startDateTime = formatDateTime(startDate, event.startTime);
+				const endDateTime = formatDateTime(startDate, event.endTime);
+				const untilDateTime = formatDateTime(event.endDate, event.endTime);
+				const byDayRule = event.daysOfWeek.map(day => dayMapReverse[dayMap[day]]).join(',');
+
+				let eventContent = `BEGIN:VEVENT
+SUMMARY:${event.summary}
+DTSTART:${startDateTime}
+DTEND:${endDateTime}
+RRULE:FREQ=WEEKLY;UNTIL=${untilDateTime};BYDAY=${byDayRule}
+LOCATION:${event.location}
+DESCRIPTION:${event.note}`;
+
+				alertTimes.forEach(alertTime => {
+					eventContent += `
+BEGIN:VALARM
+TRIGGER:-PT${alertTime}M
+ACTION:DISPLAY
+DESCRIPTION:Reminder
+END:VALARM`;
+				});
+
+				eventContent += `
+END:VEVENT`;
+
+				console.log('Generated event content:', eventContent);
+				return eventContent;
+			};
+
+			const alertTimes = document.getElementById('alertTimes').value.split(',').map(time => time.trim());
+
+			let icalContent = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Nicolas Lopatin//SCU Workday Excel Schedule to iCal//EN`;
+
+			events.forEach(event => {
+				console.log('Adding event to iCal content');
+				icalContent += `
+${createEvent(event, alertTimes)}`;
+			});
+
+			icalContent += `
+END:VCALENDAR`;
+
+			console.log('Generated iCal content:', icalContent);
+
+			const blob = new Blob([icalContent], { type: 'text/calendar' });
+			const url = URL.createObjectURL(blob);
+			
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = 'events.ics';
+			document.body.appendChild(a); // Required for Firefox
+			a.click();
+			document.body.removeChild(a);
+			URL.revokeObjectURL(url);
+			
+			console.log('iCal creation complete');
+		}
+	</script>
+</head>
+
+<body>
+	<label for="fileInput">Select the exported Excel spreadsheet of your SCU schedule from Workday:</label>
+	<input type="file" id="fileInput" /><br><br>
+	<label for="alertTimes">Enter your desired alert times (minutes before event, separated by commas, more than two may
+		not work on some platforms):</label>
+	<input type="text" id="alertTimes" value="10,15" /><br><br>
+	<button onclick="processExcel()">Generate iCal</button>
+</body>
+
+</html>

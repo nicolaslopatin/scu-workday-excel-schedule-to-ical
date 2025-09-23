@@ -243,12 +243,36 @@ END:VCALENDAR`;
 </head>
 
 <body>
-	<label for="fileInput">Select the exported Excel spreadsheet of your SCU schedule from Workday:</label>
-	<input type="file" id="fileInput" /><br><br>
-	<label for="alertTimes">Enter your desired alert times (minutes before event, separated by commas, more than two may
-		not work on some platforms):</label>
-	<input type="text" id="alertTimes" value="10,15" /><br><br>
-	<button onclick="processExcel()">Generate iCal</button>
+	<h1>SCU Workday Excel Schedule to iCal</h1>
+	<section>
+		<h2>About This Tool</h2>
+		<p>This tool creates calendar events for your SCU classes, by generating an iCal (.ics) file from an exported Excel spreadsheet of your SCU schedule from Workday.</p>
+		<p>This tool was created by Nicolas Lopatin, a student at Santa Clara University. It is not affiliated with or endorsed by Santa Clara University or Workday.</p>
+		<details>
+			<summary>How To Use</summary>
+			<ol>
+				<li>Log in to Workday and navigate to your class schedule (Academics > View My Courses)</li>
+				<li>Press the "Export to Excel" button above the table (on the right) to download your schedule as an Excel file.
+				</li>
+				<li>Select the exported Excel file using the file input below.</li>
+				<li>Specify your desired alert times (in minutes before each event) using the text field below.</li>
+				<li>Click "Generate iCal" to download the .ics file.</li>
+				<li>Import the .ics file to your preferred calendar application (e.g., Google Calendar, Apple Calendar, Outlook) and
+					enjoy!</li>
+			</ol>
+		</details>	
+		<p>Note: This tool processes the Excel file entirely in your browser, and no data is sent to any server. All of your information stays on your device.</p>
+	</section>
+	<hr>
+	<section>
+		<h2>Create Calendar Events</h2>
+		<label for="fileInput">Select the exported Excel spreadsheet of your SCU schedule from Workday:</label>
+		<input type="file" id="fileInput" /><br><br>
+		<label for="alertTimes">Enter your desired alert times (minutes before event, separated by commas, more than two may
+			not work on some platforms):</label>
+		<input type="text" id="alertTimes" value="10,15" /><br><br>
+		<button onclick="processExcel()">Generate iCal</button>
+	</section>
 </body>
 
 </html>

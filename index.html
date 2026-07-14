@@ -10,7 +10,7 @@
 		function processExcel() {
 			const fileInput = document.getElementById('fileInput');
 			if (!fileInput.files.length || fileInput.files[0].type !== 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
-				alert('Please upload an Excel file.');
+				alert('Please upload a standard Excel file.');
 				return;
 			}
 
@@ -23,16 +23,6 @@
 				const firstSheetName = workbook.SheetNames[0];
 				const worksheet = workbook.Sheets[firstSheetName];
 
-				const headerRow = 3; // As seen when opened in Excel (1-based index)
-
-				const headerColumns = {
-					"Course Listing": null,
-					"Meeting Patterns": null,
-					"Instructor": null,
-					"Start Date": null,
-					"End Date": null
-				};
-				
 				// Function to get the range of the sheet if the range metadata is not set correctly in the file
 				function getSheetRange(worksheet) {
 					let minRow = Infinity, maxRow = -1, minCol = Infinity, maxCol = -1;
@@ -50,58 +40,142 @@
 					};
 				}
 
-				let range = XLSX.utils.decode_range(worksheet['!ref']);
+				let range = worksheet['!ref'] ? XLSX.utils.decode_range(worksheet['!ref']) : getSheetRange(worksheet);
 				if (range.s.c === range.e.c && range.s.r === range.e.r) {
 					// If only one cell is detected (the range metadata wasn't set correctly), recalculate using getSheetRange
 					range = getSheetRange(worksheet);
 				}
 				console.log('Range:', range);
-				
-				// Map header columns to their respective column letters
-				for (let c = range.s.c; c <= range.e.c; ++c) {
-					const cellAddress = XLSX.utils.encode_cell({ c: c, r: headerRow - 1 });
+
+				function getCellValue(rowIndex, colIndex) {
+					if (colIndex === null || colIndex === undefined) return '';
+					const cellAddress = XLSX.utils.encode_cell({ c: colIndex, r: rowIndex });
 					const cell = worksheet[cellAddress];
-					if (cell && cell.v && headerColumns.hasOwnProperty(cell.v.trim())) {
-						headerColumns[cell.v.trim()] = XLSX.utils.encode_col(c);
-					}
+					if (!cell) return '';
+					return cell.v !== undefined && cell.v !== null ? cell.v : '';
 				}
-				console.log('Header Columns:', headerColumns);
+
+				function normalizeHeader(value) {
+					return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+				}
+
+				function findHeaderInfo() {
+					const formats = [
+						{
+							name: 'View My Courses',
+							fields: {
+								summary: ['Course Listing'],
+								meetingPatterns: ['Meeting Patterns'],
+								instructor: ['Instructor'],
+								startDate: ['Start Date'],
+								endDate: ['End Date']
+							}
+						},
+						{
+							name: 'SCU Find Course Sections',
+							fields: {
+								summary: ['Course Section'],
+								meetingPatterns: ['Meeting Patterns'],
+								location: ['Locations'],
+								instructor: ['All Instructors'],
+								startDate: ['Start Date'],
+								endDate: ['End Date']
+							}
+						}
+					];
+
+					for (let r = range.s.r; r <= range.e.r; ++r) {
+						const rowHeaders = {};
+						for (let c = range.s.c; c <= range.e.c; ++c) {
+							const header = normalizeHeader(getCellValue(r, c));
+							if (header) rowHeaders[header] = c;
+						}
+
+						for (const format of formats) {
+							const columns = {};
+							let foundAllRequiredColumns = true;
+							for (const [field, aliases] of Object.entries(format.fields)) {
+								const columnIndex = aliases
+									.map(alias => rowHeaders[normalizeHeader(alias)])
+									.find(index => index !== undefined);
+
+								if (columnIndex === undefined) {
+									foundAllRequiredColumns = false;
+									break;
+								}
+								columns[field] = columnIndex;
+							}
+
+							if (foundAllRequiredColumns) {
+								return { format: format.name, headerRowIndex: r, columns };
+							}
+						}
+					}
+
+					return null;
+				}
+
+				function formatDate(value) {
+					if (!value) return '';
+					if (value instanceof Date) return value.toISOString().split('T')[0];
+					if (typeof value === 'number') return XLSX.SSF.format('yyyy-mm-dd', value);
+
+					const parsedDate = new Date(value);
+					if (!Number.isNaN(parsedDate.getTime())) {
+						return parsedDate.toISOString().split('T')[0];
+					}
+
+					return String(value);
+				}
+
+				function formatCourseSection(courseSection) {
+					const sectionMatch = String(courseSection || '').trim().match(/^(.+?[^ ])-\d+(.+)$/);
+					if (!sectionMatch) return String(courseSection || '').trim();
+					return `${sectionMatch[1]}${sectionMatch[2]}`;
+				}
+
+				const headerInfo = findHeaderInfo();
+				if (!headerInfo) {
+					alert('Could not find the required schedule columns. Please upload a supported Workday Excel schedule.');
+					return;
+				}
+
+				console.log('Detected header info:', headerInfo);
 
 				let events = [];
 
-				let row = headerRow + 1;
+				let rowIndex = headerInfo.headerRowIndex + 1;
 
 				// Loop through the rows to extract event data
-				while (true) {
+				while (rowIndex <= range.e.r) {
 					let event = {};
 					let isEmptyRow = true;
 
-					// Get cell values by header
-					const summaryCell = worksheet[headerColumns["Course Listing"] + row];
-					const meetingPatternsCell = worksheet[headerColumns["Meeting Patterns"] + row];
-					const instructorCell = worksheet[headerColumns["Instructor"] + row];
-					const startDateCell = worksheet[headerColumns["Start Date"] + row];
-					const endDateCell = worksheet[headerColumns["End Date"] + row];
-					
 					// Prepare event data
-					const summary = summaryCell ? summaryCell.v : '';
-					const meetingPatterns = meetingPatternsCell ? meetingPatternsCell.v : '';
-					const instructor = instructorCell ? instructorCell.v : '';
-					let startDate = startDateCell ? startDateCell.v : '';
-					let endDate = endDateCell ? endDateCell.v : '';
+					let summary = getCellValue(rowIndex, headerInfo.columns.summary);
+					let meetingPatterns = getCellValue(rowIndex, headerInfo.columns.meetingPatterns);
+					const location = getCellValue(rowIndex, headerInfo.columns.location);
+					const instructor = getCellValue(rowIndex, headerInfo.columns.instructor);
+					const startDate = formatDate(getCellValue(rowIndex, headerInfo.columns.startDate));
+					const endDate = formatDate(getCellValue(rowIndex, headerInfo.columns.endDate));
 
-					// Format dates
-					if (startDate) startDate = XLSX.SSF.format('yyyy-mm-dd', startDate);
-					if (endDate) endDate = XLSX.SSF.format('yyyy-mm-dd', endDate);
+					if (headerInfo.format === 'SCU Find Course Sections') {
+						summary = formatCourseSection(summary);
+						if (meetingPatterns && location) {
+							meetingPatterns = `${meetingPatterns} | ${location}`;
+						}
+					}
 
 					// Extract meeting pattern info
 					if (meetingPatterns) {
 						const parts = meetingPatterns.split(' | ');
-						event.daysOfWeek = parts[0].split(' ');
-						const timeRange = parts[1].split(' - ');
-						event.startTime = convertTimeTo24HourFormat(timeRange[0]);
-						event.endTime = convertTimeTo24HourFormat(timeRange[1]);
-						event.location = parts[2];
+						if (parts.length >= 3) {
+							event.daysOfWeek = parts[0].split(' ');
+							const timeRange = parts[1].split(' - ');
+							event.startTime = convertTimeTo24HourFormat(timeRange[0]);
+							event.endTime = convertTimeTo24HourFormat(timeRange[1]);
+							event.location = parts.slice(2).join(' | ');
+						}
 					}
 
 					// Set event properties
@@ -119,7 +193,7 @@
 					}
 
 					events.push(event);
-					row++;
+					rowIndex++;
 				}
 
 				console.log('Extracted events:', events);
@@ -251,14 +325,13 @@ END:VCALENDAR`;
 		<details>
 			<summary>How To Use</summary>
 			<ol>
-				<li>Log in to Workday and navigate to your class schedule (Academics > View My Courses)</li>
-				<li>Press the "Export to Excel" button above the table (on the right) to download your schedule as an Excel file.
-				</li>
+				<li>Log in to Workday.</li>
+				<li>Navigate to your class schedule (Academics > View My Courses) or alternately search for classes in a specific academic period (Academics > SCU Find Course Sections).</li>
+				<li>Press the "Export to Excel" button above the table (on the right) to download your schedule as an Excel file.</li>
 				<li>Select the exported Excel file using the file input below.</li>
 				<li>Specify your desired alert times (in minutes before each event) using the text field below.</li>
 				<li>Click "Generate iCal" to download the .ics file.</li>
-				<li>Import the .ics file to your preferred calendar application (e.g., Google Calendar, Apple Calendar, Outlook) and
-					enjoy!</li>
+				<li>Import the .ics file to your preferred calendar application (e.g., Google Calendar, Apple Calendar, Outlook) and enjoy!</li>
 			</ol>
 		</details>	
 		<p>Note: This tool processes the Excel file entirely in your browser, and no data is sent to any server. All of your information stays on your device.</p>
